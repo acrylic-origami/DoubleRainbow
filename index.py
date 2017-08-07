@@ -7,6 +7,9 @@ import math
 
 from scipy.spatial import KDTree
 from xml.dom import minidom
+from HTMLParser import HTMLParser
+import datetime
+import re
 import os
 import shutil
 import requests
@@ -42,52 +45,103 @@ def travel(origin, heading, distance): # distance in radians, heading is from tr
 		lat
 	))
 
+class CloudmaskDirectoryParser(HTMLParser):
+	def __init__(self):
+		HTMLParser.__init__(self)
+		self.latest = None
+	def datetime_from_filename(self, url):
+		[_, _, year, day, time] = url.split('/')[-1][:-len('.kml')].split('_')
+		return datetime.datetime.strptime('%d %s %s' % (int(year), day, time), '%Y %j %H%M')
+	def handle_starttag(self, tag, attrs):
+		if tag.lower() == 'a':
+			href = [attr[1] for attr in attrs if attr[0] == 'href'][0]
+			if re.match('clavrx_goes13_\d+_\d+_\d+\.kml', href):
+				date = self.datetime_from_filename(href)
+				
+				if self.latest == None or date > self.latest:
+					self.latest = date
+
 if __name__ == '__main__':
 	HUNDRED_FEET_TO_KM = 0.3048 * 100 * 0.001
-
-	# sys.argv expect: [__FILE__, cloudmask KML, radar tiff, metar json, elevation]
-	f_cloudmask, f_radar, f_metar, f_out = sys.argv[1:] # f_elevation
-	f_radar_wld = '%s.wld' % '.'.join(f_radar.split('.')[:-1])
-	# need to open radar with image lib to convert to greyscale; openCV?
-	radar = cv2.imread(f_radar, cv2.IMREAD_GRAYSCALE)
 	
-	with open(f_radar_wld, 'r') as radar_wld, open(f_metar, 'r') as metar, open(f_out, 'a') as outfile:
+	url_cloudmask_directory = 'http://cimss.ssec.wisc.edu/clavrx/google_earth/goes_east_kml/'
+	
+	res_cloudmask_directory = requests.get(url_cloudmask_directory)
+	cloudmask_directory_parser = CloudmaskDirectoryParser()
+	cloudmask_directory_parser.feed(res_cloudmask_directory.text)
+	now = cloudmask_directory_parser.latest
+	
+	print(now.strftime('%Y_%j_%H%M'))
+	
+	url_cloudmask = 'http://cimss.ssec.wisc.edu/clavrx/google_earth/goes_east_kml/clavrx_goes13_%s.kml' % now.strftime('%Y_%j_%H%M')
+	
+	url_radar = 'https://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.png' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
+	url_radar_wld = 'https://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.wld' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
+	url_metar = 'http://aviationweather.ncep.noaa.gov/gis/scripts/MetarJSON.php?date=%s' % now.strftime('%Y%m%d%H%M')
+	
+	res_cloudmask = requests.get(url_cloudmask, stream=True)
+	res_radar = requests.get(url_radar, stream=True)
+	res_radar_wld = requests.get(url_radar_wld, stream=True)
+	res_metar = requests.get(url_metar, stream=True)
+	
+	tmp_dir = '/tmp/%s' % now.strftime('%Y%m%d%H%M')
+	
+	if not os.path.exists(tmp_dir):
+		os.makedirs(tmp_dir)
+		
+	with open('%s/radar.png' % tmp_dir, 'wb') as f:
+		res_radar.raw.decode_content = True
+		shutil.copyfileobj(res_radar.raw, f)
+	
+	radar = cv2.imread('%s/radar.png' % tmp_dir, cv2.IMREAD_GRAYSCALE)
+	
+	cloudmask_kml = minidom.parseString(res_cloudmask.text)
+	overlays = cloudmask_kml.getElementsByTagName('GroundOverlay')
+	for overlay in overlays:
+		if overlay.getElementsByTagName('name')[0].childNodes[0].nodeValue.strip() == 'Cloud Mask':
+			url = overlay.getElementsByTagName('Icon')[0].getElementsByTagName('href')[0].childNodes[0].nodeValue
+			
+			# wld params
+			latlonbox = overlay.getElementsByTagName('LatLonBox')[0]
+			bounds = [
+				float(latlonbox.getElementsByTagName('north')[0].childNodes[0].nodeValue),
+				float(latlonbox.getElementsByTagName('south')[0].childNodes[0].nodeValue),
+				float(latlonbox.getElementsByTagName('east')[0].childNodes[0].nodeValue),
+				float(latlonbox.getElementsByTagName('west')[0].childNodes[0].nodeValue)
+			]
+			
+			cloudmask_response = requests.get(url, stream=True)
+				
+			with open('%s/cmask.png' % tmp_dir, 'wb') as tmpfile:
+				cloudmask_response.raw.decode_content = True
+				shutil.copyfileobj(cloudmask_response.raw, tmpfile)
+			
+			cloudmask = cv2.imread('%s/cmask.png' % tmp_dir, cv2.IMREAD_GRAYSCALE)
+			cloudmask_nw = np.asarray([ bounds[3], bounds[0] ])
+			cloudmask_dv = np.divide(
+				np.asarray([bounds[2] - bounds[3], bounds[1] - bounds[0]]),
+				np.asarray(cloudmask.shape)
+			)
+			break
+	
+	radar_wld = res_radar_wld.text
+	metar_json = res_metar.json()
+	
+	f_out = 'out/%s.json' % now.strftime('%Y%m%d%H%M')
+	
+	# sys.argv expect: [__FILE__, cloudmask KML, radar tiff, metar json, elevation]
+	# f_cloudmask, f_radar, f_metar, f_out = sys.argv[1:] # f_elevation
+	# f_radar_wld = '%s.wld' % '.'.join(f_radar.split('.')[:-1])
+	# # need to open radar with image lib to convert to greyscale; openCV?
+	# radar = cv2.imread(f_radar, cv2.IMREAD_GRAYSCALE)
+	
+	with open(f_out, 'w') as outfile:
+		# with open(f_radar_wld, 'r') as radar_wld, open(f_metar, 'r') as metar, open(f_out, 'a') as outfile:
+		
 		# radar params
-		[radar_dx, _, _, radar_dy, radar_nwx, radar_nwy] = [float(v.strip()) for v in list(radar_wld)]
+		[radar_dx, _, _, radar_dy, radar_nwx, radar_nwy] = [float(v.strip()) for v in radar_wld.split('\n')]
 		radar_nw = np.asarray([radar_nwx, radar_nwy])
 		radar_dv = np.asarray([radar_dx, radar_dy])
-		
-		cloudmask_kml = minidom.parse(f_cloudmask)
-		overlays = cloudmask_kml.getElementsByTagName('GroundOverlay')
-		for overlay in overlays:
-			if overlay.getElementsByTagName('name')[0].childNodes[0].nodeValue.strip() == 'Cloud Mask':
-				url = overlay.getElementsByTagName('Icon')[0].getElementsByTagName('href')[0].childNodes[0].nodeValue
-				
-				# wld params
-				latlonbox = overlay.getElementsByTagName('LatLonBox')[0]
-				bounds = [
-					float(latlonbox.getElementsByTagName('north')[0].childNodes[0].nodeValue),
-					float(latlonbox.getElementsByTagName('south')[0].childNodes[0].nodeValue),
-					float(latlonbox.getElementsByTagName('east')[0].childNodes[0].nodeValue),
-					float(latlonbox.getElementsByTagName('west')[0].childNodes[0].nodeValue)
-				]
-				
-				cloudmask_response = requests.get(url, stream=True)
-				d, f = url.split('/')[-2:]
-				if not os.path.exists('/tmp/cmasks/%s' % d):
-					os.makedirs('/tmp/cmasks/%s' % d)
-					
-				with open('/tmp/cmasks/%s/%s' % (d, f), 'wb') as tmpfile:
-					cloudmask_response.raw.decode_content = True
-					shutil.copyfileobj(cloudmask_response.raw, tmpfile)
-				
-				cloudmask = cv2.imread('/tmp/cmasks/%s/%s' % (d, f), cv2.IMREAD_GRAYSCALE)
-				cloudmask_nw = np.asarray([ bounds[3], bounds[0] ])
-				cloudmask_dv = np.divide(
-					np.asarray([bounds[2] - bounds[3], bounds[1] - bounds[0]]),
-					np.asarray(cloudmask.shape)
-				)
-				break
 		
 		# cloudmask_hdf = gdal.Open(f_cloudmask)
 		# cloudmask = gdal.Open(cloudmask_hdf.GetSubDatasets()[30][0]).ReadAsArray()
@@ -121,9 +175,8 @@ if __name__ == '__main__':
 		# 	))
 		# )
 		
-		metar_geojson = json.load(metar)
-		metar_lookup = [feature['properties'] for feature in metar_geojson['features']]
-		metar_kd = KDTree([feature['geometry']['coordinates'] for feature in metar_geojson['features']])
+		metar_lookup = [feature['properties'] for feature in metar_json['features']]
+		metar_kd = KDTree([feature['geometry']['coordinates'] for feature in metar_json['features']])
 		
 		# _, cloud_contours, cloud_hierarchy = cv2.findContours(cloudmask.astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 		
@@ -180,10 +233,10 @@ if __name__ == '__main__':
 					# use small-angle approximation so that the pythag output is still radians
 					T = datetime.datetime(2017, 07, 27, 22, 15)
 					sky_intercept = travel(
-P * math.pi / 180,
-math.pi - (pysolar.GetAzimuth(P[1], P[0], T) * math.pi / 180), # pysolar uses latlon; we use lonlat
-ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], T) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
-)
+	P * math.pi / 180,
+	math.pi - (pysolar.GetAzimuth(P[1], P[0], T) * math.pi / 180), # pysolar uses latlon; we use lonlat
+	ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], T) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
+	)
 					cloudmask_coords = np.divide(sky_intercept * 180 / math.pi - cloudmask_nw, cloudmask_dv).astype(np.uint16)
 					cloudmask_px = cloudmask[cloudmask_coords[1], cloudmask_coords[0]]
 					
