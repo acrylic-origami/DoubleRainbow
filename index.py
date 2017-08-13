@@ -17,7 +17,7 @@ import numpy as np
 import Pysolar.solar as pysolar
 # import requests
 import cv2
-import gdal
+# import gdal
 
 def contour_depth(idx, hierarchy):
 	if hierarchy[0][idx][2] == -1:
@@ -71,12 +71,10 @@ if __name__ == '__main__':
 	cloudmask_directory_parser.feed(res_cloudmask_directory.text)
 	now = cloudmask_directory_parser.latest
 	
-	print(now.strftime('%Y_%j_%H%M'))
-	
 	url_cloudmask = 'http://cimss.ssec.wisc.edu/clavrx/google_earth/goes_east_kml/clavrx_goes13_%s.kml' % now.strftime('%Y_%j_%H%M')
 	
-	url_radar = 'https://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.png' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
-	url_radar_wld = 'https://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.wld' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
+	url_radar = 'http://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.png' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
+	url_radar_wld = 'http://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.wld' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
 	url_metar = 'http://aviationweather.ncep.noaa.gov/gis/scripts/MetarJSON.php?date=%s' % now.strftime('%Y%m%d%H%M')
 	
 	res_cloudmask = requests.get(url_cloudmask, stream=True)
@@ -127,7 +125,8 @@ if __name__ == '__main__':
 	radar_wld = res_radar_wld.text
 	metar_json = res_metar.json()
 	
-	f_out = 'out/%s.json' % now.strftime('%Y%m%d%H%M')
+	out_dir = sys.argv[1]
+	f_out = '%s/%s.json' % (out_dir, now.strftime('%Y%m%d%H%M'))
 	
 	# sys.argv expect: [__FILE__, cloudmask KML, radar tiff, metar json, elevation]
 	# f_cloudmask, f_radar, f_metar, f_out = sys.argv[1:] # f_elevation
@@ -184,7 +183,7 @@ if __name__ == '__main__':
 		
 		# add visilibity? Eh, maybe not, might be cheaper to still do the point-in-polygon thing anyways since it's per-point
 		# note: we're also considering inner contours too. Not likely to have big holes, but then it won't be expensive anyways
-		_, radar_contours, _ = cv2.findContours((radar > 0).astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+		radar_contours, _ = cv2.findContours((radar > 0).astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 		# TODO reproject radar contour to latlon
 		# actually, no need: the images are already WGS84
 		# projection is simply taking into account the world file
@@ -231,11 +230,10 @@ if __name__ == '__main__':
 					# elev_map.at(P) # although maybe we assume the elev is pretty similar
 					# TODO: get T := DateTime, as mean time for all the data imputs
 					# use small-angle approximation so that the pythag output is still radians
-					T = datetime.datetime(2017, 07, 27, 22, 15)
 					sky_intercept = travel(
 	P * math.pi / 180,
-	math.pi - (pysolar.GetAzimuth(P[1], P[0], T) * math.pi / 180), # pysolar uses latlon; we use lonlat
-	ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], T) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
+	math.pi - (pysolar.GetAzimuth(P[1], P[0], now) * math.pi / 180), # pysolar uses latlon; we use lonlat
+	ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], now) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
 	)
 					cloudmask_coords = np.divide(sky_intercept * 180 / math.pi - cloudmask_nw, cloudmask_dv).astype(np.uint16)
 					cloudmask_px = cloudmask[cloudmask_coords[1], cloudmask_coords[0]]
