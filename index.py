@@ -6,6 +6,7 @@ import sys
 import math
 
 from scipy.spatial import KDTree
+import scipy.misc
 from xml.dom import minidom
 from HTMLParser import HTMLParser
 import datetime
@@ -91,7 +92,9 @@ if __name__ == '__main__':
 		res_radar.raw.decode_content = True
 		shutil.copyfileobj(res_radar.raw, f)
 	
-	radar = cv2.imread('%s/radar.png' % tmp_dir, cv2.IMREAD_GRAYSCALE)
+	radar = cv2.imread('%s/radar.png' % tmp_dir, cv2.IMREAD_COLOR)
+	radar_gray = cv2.cvtColor(radar, cv2.COLOR_BGR2GRAY)
+	radar_mask = radar_gray > 0
 	
 	cloudmask_kml = minidom.parseString(res_cloudmask.text)
 	overlays = cloudmask_kml.getElementsByTagName('GroundOverlay')
@@ -101,7 +104,7 @@ if __name__ == '__main__':
 			
 			# wld params
 			latlonbox = overlay.getElementsByTagName('LatLonBox')[0]
-			bounds = [
+			cloudmask_bounds = [
 				float(latlonbox.getElementsByTagName('north')[0].childNodes[0].nodeValue),
 				float(latlonbox.getElementsByTagName('south')[0].childNodes[0].nodeValue),
 				float(latlonbox.getElementsByTagName('east')[0].childNodes[0].nodeValue),
@@ -110,14 +113,14 @@ if __name__ == '__main__':
 			
 			cloudmask_response = requests.get(url, stream=True)
 				
-			with open('%s/cmask.png' % tmp_dir, 'wb') as tmpfile:
+			with open('%s/cloudmask.png' % tmp_dir, 'wb') as tmpfile:
 				cloudmask_response.raw.decode_content = True
 				shutil.copyfileobj(cloudmask_response.raw, tmpfile)
 			
-			cloudmask = cv2.imread('%s/cmask.png' % tmp_dir, cv2.IMREAD_GRAYSCALE)
-			cloudmask_nw = np.asarray([ bounds[3], bounds[0] ])
+			cloudmask = cv2.imread('%s/cloudmask.png' % tmp_dir, cv2.IMREAD_GRAYSCALE)
+			cloudmask_nw = np.asarray([ cloudmask_bounds[3], cloudmask_bounds[0] ])
 			cloudmask_dv = np.divide(
-				np.asarray([bounds[2] - bounds[3], bounds[1] - bounds[0]]),
+				np.asarray([cloudmask_bounds[2] - cloudmask_bounds[3], cloudmask_bounds[1] - cloudmask_bounds[0]]),
 				np.asarray(cloudmask.shape)
 			)
 			break
@@ -125,65 +128,27 @@ if __name__ == '__main__':
 	radar_wld = res_radar_wld.text
 	metar_json = res_metar.json()
 	
-	out_dir = sys.argv[1]
-	f_out = '%s/%s.json' % (out_dir, now.strftime('%Y%m%d%H%M'))
+	base_out_dir = sys.argv[1]
+	out_dir = '%s/%s/%s/' % (base_out_dir, now.strftime('%Y%m%d'), now.strftime('%H%M'))
+	if not os.path.exists(out_dir):
+		os.makedirs(out_dir)
 	
-	# sys.argv expect: [__FILE__, cloudmask KML, radar tiff, metar json, elevation]
-	# f_cloudmask, f_radar, f_metar, f_out = sys.argv[1:] # f_elevation
-	# f_radar_wld = '%s.wld' % '.'.join(f_radar.split('.')[:-1])
-	# # need to open radar with image lib to convert to greyscale; openCV?
-	# radar = cv2.imread(f_radar, cv2.IMREAD_GRAYSCALE)
-	
-	with open(f_out, 'w') as outfile:
-		# with open(f_radar_wld, 'r') as radar_wld, open(f_metar, 'r') as metar, open(f_out, 'a') as outfile:
-		
+	with open('%s/cloudmask.png' % out_dir, 'w') as cloudmask_out,\
+	     open('%s/radar.png' % out_dir, 'w') as radar_out,\
+	     open('%s/cloudmask.wld' % out_dir, 'w') as cloudmask_wld_out,\
+	     open('%s/radar.wld' % out_dir, 'w') as radar_wld_out,\
+	     open('%s/rainbows.json' % out_dir, 'w') as rainbow_out:
 		# radar params
 		[radar_dx, _, _, radar_dy, radar_nwx, radar_nwy] = [float(v.strip()) for v in radar_wld.split('\n')]
 		radar_nw = np.asarray([radar_nwx, radar_nwy])
 		radar_dv = np.asarray([radar_dx, radar_dy])
 		
-		# cloudmask_hdf = gdal.Open(f_cloudmask)
-		# cloudmask = gdal.Open(cloudmask_hdf.GetSubDatasets()[30][0]).ReadAsArray()
-		# lon = gdal.Open(cloudmask_hdf.GetSubDatasets()[6][0]).ReadAsArray()
-		# lat = gdal.Open(cloudmask_hdf.GetSubDatasets()[5][0]).ReadAsArray()
-		# cloudmask_lookup = []
-		# cloudmask_coords = []
-		
-		# for i in range(cloudmask.shape[0]):
-		# 	for j in range(cloudmask.shape[1]):
-		# 		cloudmask_lookup.append(cloudmask[i, j])
-		# 		cloudmask_coords.append([ lon[i, j], lat[i, j] ])
-		
-		# cloudmask_kdtree = KDTree(cloudmask_coords)
-		
-		# cardinal_directions = itertools.permutations([-1, 0, 1], 2)
-		# for i, row in enumerate(border_mask):
-		# 	for j, pix in enumerate(row):
-		# 		if pix > 0:
-		# 			for direction in cardinal_directions:
-		# 				if globe_mask[i + direction[0], j + direction[1]] > 0 and not border_mask[i + direction[0], j + direction[1]]:
-		# 					cloudmask[i, j] = cloudmask[i + direction[0], j + direction[1]]
-		
-		# cloudmask = np.logical_and(
-		# 	globe_mask > 0,
-		# 	np.logical_or.reduce((
-		# 		cv2.inRange(cloudmask, (0, 0, 255), (0, 0, 255)), # ice cloud
-		# 		cv2.inRange(cloudmask, (0, 255, 255), (0, 255, 255)), # ice cloud weak
-		# 		cv2.inRange(cloudmask, (255, 255, 0), (255, 255, 0)), # supercooled water cloud
-		# 		cv2.inRange(cloudmask, (255, 0, 0), (255, 0, 0)) # water cloud
-		# 	))
-		# )
-		
 		metar_lookup = [feature['properties'] for feature in metar_json['features']]
 		metar_kd = KDTree([feature['geometry']['coordinates'] for feature in metar_json['features']])
 		
-		# _, cloud_contours, cloud_hierarchy = cv2.findContours(cloudmask.astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-		
-		# cloud_polies = [Polygon([deprojector.deproject(pt[0]) for pt in poly]) for poly in cloud_contours if poly.shape[0] > 2]
-		
 		# add visilibity? Eh, maybe not, might be cheaper to still do the point-in-polygon thing anyways since it's per-point
 		# note: we're also considering inner contours too. Not likely to have big holes, but then it won't be expensive anyways
-		radar_contours, _ = cv2.findContours((radar > 0).astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+		_, radar_contours, _ = cv2.findContours(radar_mask.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 		# TODO reproject radar contour to latlon
 		# actually, no need: the images are already WGS84
 		# projection is simply taking into account the world file
@@ -228,28 +193,96 @@ if __name__ == '__main__':
 				for P in contour:
 					# TODO implement class ElevMap { at(LonLat): float }
 					# elev_map.at(P) # although maybe we assume the elev is pretty similar
-					# TODO: get T := DateTime, as mean time for all the data imputs
-					# use small-angle approximation so that the pythag output is still radians
 					sky_intercept = travel(
-	P * math.pi / 180,
-	math.pi - (pysolar.GetAzimuth(P[1], P[0], now) * math.pi / 180), # pysolar uses latlon; we use lonlat
-	ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], now) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
-	)
+						P * math.pi / 180,
+						math.pi - (pysolar.GetAzimuth(P[1], P[0], now) * math.pi / 180), # pysolar uses latlon; we use lonlat
+						ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], now) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
+					)
 					cloudmask_coords = np.divide(sky_intercept * 180 / math.pi - cloudmask_nw, cloudmask_dv).astype(np.uint16)
 					cloudmask_px = cloudmask[cloudmask_coords[1], cloudmask_coords[0]]
 					
 					if cloudmask_px == 0 or \
 						cloudmask_px == 42:
-					   outfile.write('[%s, %s],\n' % tuple(P))
+					   rainbow_out.write('[%s, %s],\n' % tuple(P))
 					   sky_points.add((int(round(cloudmask_coords[1])), int(round(cloudmask_coords[0]))))
-					
-					# clear_flag = True
-					# for idx, cloud_poly in enumerate(cloud_polies):
-					# 	if cloud_poly.contains(Point(sky_intercept)):
-					# 		if contour_depth(idx, cloud_hierarchy) % 2 == 0: # it's a cloud by parity
-					# 			clear_flag = False
-					# 		break
-							
-					# if clear_flag:
-					# 	# rainbow_points.append(P)
-					# 	outfile.write('[%s, %s],\n' % tuple(P))
+		
+		# aesthetic changes to source images
+		radar_src_colorramp = [
+			( 0, 0, 0, 0 ),
+			( 236, 236, 0, 0 ),
+			( 246, 160, 1, 0 ),
+			( 246, 0, 0, 0 ),
+			( 0, 255, 0, 0 ),
+			( 0, 200, 0, 0 ),
+			( 0, 144, 0, 0 ),
+			( 0, 255, 255, 0 ),
+			( 0, 192, 231, 0 ),
+			( 0, 144, 255, 0 ),
+			( 0, 0, 255, 0 ),
+			( 0, 0, 214, 0 ),
+			( 0, 0, 192, 0 ),
+			( 255, 0, 255, 0 ),
+			( 153, 85, 201, 0 )
+		]
+		radar_grayscale_colorramp = [int(round(0.299 * d[2] + 0.144 * d[0] + 0.587 * d[1])) for d in radar_src_colorramp]
+		radar_dest_colorramp = [
+			( 0, 0, 0, 0),
+			( 203, 234, 249, 255 ),
+			( 173, 220, 242, 255 ),
+			( 157, 207, 230, 255 ),
+			( 139, 200, 228, 255 ),
+			( 112, 179, 218, 255 ),
+			( 85, 160, 207, 255 ),
+			( 62, 148, 202, 255 ),
+			( 45, 130, 195, 255 ),
+			( 27, 111, 183, 255 ),
+			( 10, 83, 157, 255 ),
+			( 6, 64, 130, 255 ),
+			( 4, 49, 104, 255 ),
+			( 4, 32, 104, 255 ),
+			( 3, 23, 81, 255 )
+		]
+		radar_out_img = np.zeros(radar.shape[0:2] + (4,))
+		for i, color in enumerate(radar_grayscale_colorramp):
+			radar_out_img += np.multiply((radar_gray == color).astype(np.uint8).reshape(radar_gray.shape + (1,)), np.tile(
+					radar_dest_colorramp[i],
+					radar_gray.shape + (1,)
+				))
+			# mask = np.ma.array(
+			# 	np.tile(
+			# 		np.tile(
+			# 			radar_dest_colorramp[i],
+			# 			radar.shape[1]
+			# 		),
+			# 		radar.shape[0]
+			# 	),
+			# 	mask = np.equal(
+			# 		np.concatenate(
+			# 			(radar, np.zeros(radar.shape[0:2] + (1,))),
+			# 			axis=2
+			# 		),
+			# 		color
+			# 	)
+			# )
+			# radar_out_img += mask
+			print(color)
+		scipy.misc.imsave(radar_out, radar_out_img)
+		
+		cloudmask_out_img = np.concatenate((
+			np.zeros(cloudmask.shape + (3,)),
+			np.reshape(
+				np.logical_and(cloudmask != 0, cloudmask != 42).astype(np.uint8) * 42, # alpha = 42/255
+				cloudmask.shape + (1,)
+			)
+		), axis=2)
+		scipy.misc.imsave(cloudmask_out, cloudmask_out_img)
+		
+		cloudmask_wld = '''%f
+0
+0
+%f
+%f
+%f''' % ((cloudmask_bounds[3] - cloudmask_bounds[2]) / cloudmask.shape[1], (cloudmask_bounds[1] - cloudmask_bounds[0]) / cloudmask.shape[0], cloudmask_bounds[2], cloudmask_bounds[0])
+		cloudmask_wld_out.write(cloudmask_wld)
+		
+		radar_wld_out.write(radar_wld)
