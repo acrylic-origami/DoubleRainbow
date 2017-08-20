@@ -148,7 +148,7 @@ if __name__ == '__main__':
 		
 		# add visilibity? Eh, maybe not, might be cheaper to still do the point-in-polygon thing anyways since it's per-point
 		# note: we're also considering inner contours too. Not likely to have big holes, but then it won't be expensive anyways
-		_, radar_contours, _ = cv2.findContours(radar_mask.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+		radar_contours, _ = cv2.findContours(radar_mask.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 		# TODO reproject radar contour to latlon
 		# actually, no need: the images are already WGS84
 		# projection is simply taking into account the world file
@@ -199,8 +199,11 @@ if __name__ == '__main__':
 						ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], now) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
 					)
 					cloudmask_coords = np.divide(sky_intercept * 180 / math.pi - cloudmask_nw, cloudmask_dv).astype(np.uint16)
-					cloudmask_px = cloudmask[cloudmask_coords[1], cloudmask_coords[0]]
-					
+					try:
+						cloudmask_px = cloudmask[cloudmask_coords[1], cloudmask_coords[0]]
+					except IndexError as e:
+						continue
+
 					if cloudmask_px == 0 or \
 						cloudmask_px == 42:
 					   rainbow_out.write('[%s, %s],\n' % tuple(P))
@@ -282,7 +285,7 @@ if __name__ == '__main__':
 0
 %f
 %f
-%f''' % ((cloudmask_bounds[3] - cloudmask_bounds[2]) / cloudmask.shape[1], (cloudmask_bounds[1] - cloudmask_bounds[0]) / cloudmask.shape[0], cloudmask_bounds[2], cloudmask_bounds[0])
+%f''' % ((cloudmask_bounds[2] - cloudmask_bounds[3]) / cloudmask.shape[1], (cloudmask_bounds[1] - cloudmask_bounds[0]) / cloudmask.shape[0], cloudmask_bounds[3], cloudmask_bounds[0])
 		cloudmask_wld_out.write(cloudmask_wld)
 		
 		radar_wld_out.write(radar_wld)
