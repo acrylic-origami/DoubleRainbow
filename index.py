@@ -129,7 +129,7 @@ if __name__ == '__main__':
 	metar_json = res_metar.json()
 	
 	base_out_dir = sys.argv[1]
-	out_dir = '%s/%s/%s/' % (base_out_dir, now.strftime('%Y%m%d'), now.strftime('%H%M'))
+	out_dir = '%s/%d/%d/%d/%d/' % (base_out_dir, now.year, now.month, now.day, now.hour, now.minute)
 	if not os.path.exists(out_dir):
 		os.makedirs(out_dir)
 	
@@ -148,21 +148,21 @@ if __name__ == '__main__':
 		
 		# add visilibity? Eh, maybe not, might be cheaper to still do the point-in-polygon thing anyways since it's per-point
 		# note: we're also considering inner contours too. Not likely to have big holes, but then it won't be expensive anyways
-		radar_contours, _ = cv2.findContours(radar_mask.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+		_, radar_contours, _ = cv2.findContours(radar_mask.astype('uint8'), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 		# TODO reproject radar contour to latlon
 		# actually, no need: the images are already WGS84
 		# projection is simply taking into account the world file
 		# lon: nwx + x * dx, lat: nwy + y * dy
 		
 		# oh yeah fill that array, that's the spot
-		sky_points = set()
+		rainbow_points = []
 		contours_skipped = 0
 		for contour_idx, px_contour in enumerate(radar_contours):
 			if px_contour.shape[0] < 3:
 				contours_skipped += 1
 				continue
 				
-			print('\r%d / %d contours completed, %d skipped, %d sky pixels hit' % (contour_idx - 1, len(radar_contours), contours_skipped, len(sky_points)), end='', file=sys.stderr)
+			print('\r%d / %d contours completed, %d skipped, %d rainbow points found' % (contour_idx - 1, len(radar_contours), contours_skipped, len(rainbow_points)), end='', file=sys.stderr)
 			if len(px_contour) > 2:
 				# where all the magic happens
 				contour = np.multiply(np.squeeze(px_contour).astype(np.float32), radar_dv) + radar_nw
@@ -206,9 +206,9 @@ if __name__ == '__main__':
 
 					if cloudmask_px == 0 or \
 						cloudmask_px == 42:
-					   rainbow_out.write('[%s, %s],\n' % tuple(P))
-					   sky_points.add((int(round(cloudmask_coords[1])), int(round(cloudmask_coords[0]))))
-		
+					   rainbow_points.append(tuple(P))
+					   
+		rainbow_out.write(json.dumps(rainbow_points))
 		# aesthetic changes to source images
 		radar_src_colorramp = [
 			( 0, 0, 0, 0 ),
@@ -251,24 +251,6 @@ if __name__ == '__main__':
 					radar_dest_colorramp[i],
 					radar_gray.shape + (1,)
 				))
-			# mask = np.ma.array(
-			# 	np.tile(
-			# 		np.tile(
-			# 			radar_dest_colorramp[i],
-			# 			radar.shape[1]
-			# 		),
-			# 		radar.shape[0]
-			# 	),
-			# 	mask = np.equal(
-			# 		np.concatenate(
-			# 			(radar, np.zeros(radar.shape[0:2] + (1,))),
-			# 			axis=2
-			# 		),
-			# 		color
-			# 	)
-			# )
-			# radar_out_img += mask
-			print(color)
 		scipy.misc.imsave(radar_out, radar_out_img)
 		
 		cloudmask_out_img = np.concatenate((
