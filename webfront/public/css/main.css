@@ -1,0 +1,49 @@
+body, html {
+	background-color:#252627;
+	color:#FFF;
+	margin:0;
+	width:100%;
+	height:100%;
+	font-family:Droid Serif, serif;
+}
+
+a {
+	color:inherit;
+	text-decoration:none;
+}
+#map {
+	width:100%;
+	height:100%;
+}
+#time-view {
+	position:absolute;
+	width:100%;
+	bottom:40px;
+	text-align:center;
+}
+	#time-view > a, #time-view > a.inactive:hover {
+		opacity:0.6;
+	}
+	#time-view > a:hover {
+		opacity:1;
+	}
+	#time-indicator {
+		font-weight:700;
+		font-size:1.3em;
+	}
+	#time-view > * {
+		display:inline-block;
+		vertical-align:middle;
+		margin:0 1em;
+	}
+
+/* SVG */
+#sun-track, #sun-progress {
+	stroke:#FFF;
+	stroke-width:3px;
+	stroke-linecap:round;
+	fill:none;
+}
+#sun-track {
+	opacity:0.3;
+}

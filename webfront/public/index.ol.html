@@ -1,0 +1,272 @@
+<html>
+	<head>
+		<link rel="stylesheet" href="css/main.css" />
+		<link href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700" />
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+		<script type="text/javascript">
+			// https://github.com/uxitten/polyfill/blob/master/string.polyfill.js
+			// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/padStart
+			if (!String.prototype.padStart) {
+			    String.prototype.padStart = function padStart(targetLength,padString) {
+				targetLength = targetLength>>0; //floor if number or convert non-number to 0;
+					padString = String(padString || ' ');
+					if (this.length > targetLength) {
+						return String(this);
+					}
+					else {
+						targetLength = targetLength-this.length;
+						if (targetLength > padString.length) {
+							padString += padString.repeat(targetLength/padString.length); //append to original to ensure we are longer than needed
+						}
+						return padString.slice(0,targetLength) + String(this);
+					}
+				};
+			}
+			requirejs.config({
+				baseUrl: 'js/vendor',
+				paths: {
+					'app': '../app',
+					'mapbox-gl': 'https://api.mapbox.com/mapbox-gl-js/v0.39.1/mapbox-gl',
+					'openlayers': 'https://cdnjs.cloudflare.com/ajax/libs/openlayers/4.3.1/ol',
+					'domReady': 'https://cdnjs.cloudflare.com/ajax/libs/require-domReady/2.0.1/domReady.min'
+				}
+			});
+			requirejs(['openlayers', 'domReady!'], function(ol) {
+				var RADAR_IMG_DIMENSIONS = [ 6000, 2600 ];
+				var CLOUDMASK_IMG_DIMENSIONS = [ 2000, 2000 ];
+				
+				types = {};
+				map = new ol.Map({
+					target: document.getElementById('map'),
+					view: new ol.View({
+						center: [0, 0],
+						zoom: 4
+						// projection: 'EPSG:4326'
+					}),
+					layers: [
+						new ol.layer.VectorTile({
+							source: new ol.source.VectorTile({
+								format: new ol.format.MVT(),
+								url: 'http://localhost:8080/data/usa/{z}/{x}/{y}.pbf'
+							}),
+							style: function(geom) {
+								if(!types.hasOwnProperty(geom.getType())) {
+									types[geom.getType()] = true;
+								}
+								if(geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon') {
+									return new ol.style.Style({
+										fill: new ol.style.Fill({
+											color: '#111113'
+										})
+									});
+								}
+								else
+									return new ol.style.Style({
+										fill: new ol.style.Fill({
+											color: '#111113'
+										}),
+										stroke: new ol.style.Stroke({
+											color: '#111113',
+											width: 1
+										})
+									});
+							}
+						})
+					]
+				});
+				
+				(function() {
+					var prev_layers = [];
+					function redraw(segmented_date) {
+						Promise.all([
+							fetch('/data/' + segmented_date.join('/') + '/radar.wld'),
+							fetch('/data/' + segmented_date.join('/') + '/cloudmask.wld'),
+							fetch('/data/' + segmented_date.join('/') + '/rainbows.json')
+						]).then(function(metadata_responses) {
+							return Promise.all([metadata_responses[0].text(), metadata_responses[1].text(), metadata_responses[2].json()]);
+						}).then(function(metadata) {
+							var radar_wld = metadata[0].split('\n').map(parseFloat);
+							var cloudmask_wld = metadata[1].split('\n').map(parseFloat);
+							var rainbow_points = metadata[2];
+							
+							for(var i = 0; i < prev_layers.length; i++)
+								map.removeLayer(prev_layers[i]);
+							
+							prev_layers = [
+								new ol.layer.Image({
+									opacity: 0.4,
+									source: new ol.source.ImageStatic({
+										url: '/data/' + segmented_date.join('/') + '/cloudmask.png',
+										projection: 'EPSG:4326',
+										imageExtent: [
+											cloudmask_wld[4],
+											cloudmask_wld[5] + cloudmask_wld[3] * CLOUDMASK_IMG_DIMENSIONS[1],
+											cloudmask_wld[4] + cloudmask_wld[0] * CLOUDMASK_IMG_DIMENSIONS[0],
+											cloudmask_wld[5]
+										],
+										imageSize: [ 2000, 2000 ]
+									})
+								}),
+								new ol.layer.Image({
+									source: new ol.source.ImageStatic({
+										url: '/data/' + segmented_date.join('/') + '/radar.png',
+										projection: 'EPSG:4326',
+										imageExtent: [
+											radar_wld[4],
+											radar_wld[5] + radar_wld[3] * RADAR_IMG_DIMENSIONS[1],
+											radar_wld[4] + radar_wld[0] * RADAR_IMG_DIMENSIONS[0],
+											radar_wld[5]
+										],
+										imageSize: [ 6000, 2600 ]
+									})
+								}),
+								new ol.layer.Vector({
+									source: new ol.source.Vector({
+										features: rainbow_points.filter(function(point) { return point != null; }).map(function(point) {
+											var center = new ol.geom.Point(point);
+											center.transform('EPSG:4326', 'EPSG:3857');
+											var feature = new ol.Feature({
+												geometry: center
+											});
+											feature.setStyle(new ol.style.Style({
+												image: new ol.style.Circle({
+													radius: 1,
+													fill: new ol.style.Fill({ color: '#d93a6b' })
+												})
+											}));
+											return feature;
+										})
+									})
+								})
+							];
+							
+							for(var i = 0; i < prev_layers.length; i++)
+								map.addLayer(prev_layers[i]);
+						});
+						document.getElementById('time-indicator').innerHTML = segmented_date.slice(3).map(function(segment) { return segment.toString().padStart(2, '0'); }).join(':') + ' UTC';
+						document.getElementById('date-indicator').innerHTML = segmented_date.slice(0, 3).join('-')
+					}
+					
+					var now = new Date();
+					fetch('/ajax/viscinity?T=' + JSON.stringify([
+						now.getUTCFullYear(),
+						now.getUTCMonth() + 1,
+						now.getUTCDate(),
+						now.getUTCHours(),
+						now.getUTCMinutes()
+					])).then(function(res) {
+						return res.json();
+					}).then(function(locator_bracket) {
+						console.log(locator_bracket);
+						fetch('/ajax/viscinity?T=' + JSON.stringify(locator_bracket[0]))
+							.then(function(res) { return res.json(); })
+							.then(function(initial_bracket) {
+								var stashed_bracket = initial_bracket;
+								redraw(locator_bracket[0]);
+								
+								if(initial_bracket[0] === null)
+									document.getElementById('rewind').className += 'inactive';
+								if(initial_bracket[1] === null)
+									document.getElementById('ffwd').className += 'inactive';
+								
+								document.getElementById('front').addEventListener('click', function() {
+									stashed_bracket = initial_bracket;
+									document.getElementById('ffwd').className += 'inactive';
+									redraw(locator_bracket[0]);
+								});
+								document.getElementById('ffwd').addEventListener('click', function() {
+									if(stashed_bracket[1] != null)
+										fetch('/ajax/viscinity?T=' + JSON.stringify(stashed_bracket[1]))
+											.then(function(res) { return res.json(); })
+											.then(function(next_bracket) {
+												redraw(stashed_bracket[1]);
+												document.getElementById('rewind').className = document.getElementById('rewind').className.replace('inactive', '');
+												if(next_bracket[1] === null)
+													document.getElementById('ffwd').className += 'inactive';
+												
+												stashed_bracket = next_bracket;
+											});
+								});
+								document.getElementById('rewind').addEventListener('click', function() {
+									if(stashed_bracket[0] != null)
+										fetch('/ajax/viscinity?T=' + JSON.stringify(stashed_bracket[0]))
+											.then(function(res) { return res.json(); })
+											.then(function(next_bracket) {
+												redraw(stashed_bracket[0]);
+												document.getElementById('ffwd').className = document.getElementById('ffwd').className.replace('inactive', '');
+												if(next_bracket[1] === null)
+													document.getElementById('rewind').className += 'inactive';
+												stashed_bracket = next_bracket;
+											});
+								});
+							});
+					});
+				})();
+			});
+		</script>
+	</head>
+	
+	<body>
+		<div id="map"></div>
+		<div id="time-view">
+			<a href="javascript:void(0)" id="rewind">&larr;</a>
+			<span id="date-wrapper">
+				<div id="time-indicator"></div>
+				<sup id="date-indicator"></sup>
+			</span>
+			<a href="javascript:void(0)" id="ffwd">&rarr;</a>
+			<a href="javascript:void(0)" id="front">&#8677;</a>
+		</div>
+		<!-- <div id="controls">
+			<div id="controls-wrapper">
+				<input type="range" id="time-controller" min="0" max="1" step="any" />
+				<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+				     viewBox="0 0 240 78"
+				     id="time-reflector">
+					<path d="M20 20a400 400, 0, 0, 0, 200 0"
+					      id="sun-track" />
+					<path d="M20 20A400 400, 0, 0, 0, 20 20"
+					      id="sun-progress" />
+					<g id="sun-icon">
+						<g>
+							<path fill="#FFF" d="M20,29.598c-5.293,0-9.6-4.306-9.6-9.598s4.307-9.6,9.6-9.6s9.598,4.307,9.598,9.6S25.293,29.598,20,29.598
+								z M20,13.511c-3.578,0-6.489,2.911-6.489,6.489s2.911,6.488,6.489,6.488s6.488-2.91,6.488-6.488S23.578,13.511,20,13.511z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M20,5.948c-0.86,0-1.555-0.696-1.555-1.555V1.556C18.445,0.696,19.141,0,20,0
+								c0.86,0,1.555,0.696,1.555,1.555v2.837C21.555,5.252,20.86,5.948,20,5.948z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M31.034,10.522c-0.398,0-0.796-0.152-1.1-0.456c-0.607-0.606-0.607-1.592,0-2.199L31.94,5.86
+								c0.607-0.607,1.592-0.607,2.199,0c0.607,0.606,0.607,1.592,0,2.199l-2.006,2.008C31.829,10.37,31.431,10.522,31.034,10.522z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M38.445,21.555h-2.838c-0.86,0-1.555-0.696-1.555-1.555c0-0.86,0.696-1.555,1.555-1.555h2.838
+								C39.304,18.445,40,19.141,40,20C40,20.86,39.304,21.555,38.445,21.555z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M33.026,34.581c-0.398,0-0.796-0.152-1.1-0.456l-2.009-2.009c-0.607-0.607-0.607-1.592,0-2.199
+								s1.592-0.607,2.199,0l2.009,2.009c0.607,0.607,0.607,1.592,0,2.199C33.822,34.429,33.424,34.581,33.026,34.581z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M20,40c-0.86,0-1.555-0.696-1.555-1.555v-2.838c0-0.86,0.696-1.555,1.555-1.555
+								c0.86,0,1.555,0.696,1.555,1.555v2.838C21.555,39.304,20.86,40,20,40z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M6.958,34.596c-0.398,0-0.796-0.152-1.1-0.456c-0.607-0.607-0.607-1.593,0-2.199l2.008-2.006
+								c0.607-0.607,1.592-0.607,2.199,0c0.607,0.607,0.607,1.593,0,2.199l-2.008,2.006C7.753,34.445,7.355,34.596,6.958,34.596z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M4.392,21.555H1.556C0.696,21.555,0,20.86,0,20c0-0.86,0.696-1.555,1.555-1.555h2.837
+								c0.86,0,1.555,0.696,1.555,1.555C5.948,20.86,5.252,21.555,4.392,21.555z"/>
+						</g>
+						<g>
+							<path fill="#FFF" d="M8.958,10.513c-0.398,0-0.796-0.152-1.1-0.456L5.853,8.053c-0.607-0.607-0.607-1.592,0-2.199
+								s1.592-0.607,2.199,0l2.005,2.005c0.607,0.607,0.607,1.592,0,2.199C9.754,10.361,9.356,10.513,8.958,10.513z"/>
+						</g>
+					</g>
+				</svg>
+			</div> -->
+		</div>
+	</body>
+</html>
