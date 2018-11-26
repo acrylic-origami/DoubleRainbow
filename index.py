@@ -1,6 +1,7 @@
 from __future__ import print_function
 import itertools
 import datetime
+from pytz import timezone
 import json
 import sys
 import math
@@ -8,14 +9,13 @@ import math
 from scipy.spatial import KDTree
 import scipy.misc
 from xml.dom import minidom
-from HTMLParser import HTMLParser
-import datetime
+from html.parser import HTMLParser
 import re
 import os
 import shutil
 import requests
 import numpy as np
-import Pysolar.solar as pysolar
+from pysolar.solar import *
 # import requests
 import cv2
 # import gdal
@@ -52,17 +52,17 @@ class CloudmaskDirectoryParser(HTMLParser):
 		self.latest = None
 	def datetime_from_filename(self, url):
 		[_, _, year, day, time] = url.split('/')[-1][:-len('.kml')].split('_')
-		return datetime.datetime.strptime('%d %s %s' % (int(year), day, time), '%Y %j %H%M')
+		return pytz.utc.localize(datetime.datetime.strptime('%d %s %s' % (int(year), day, time), '%Y %j %H%M'))
 	def handle_starttag(self, tag, attrs):
 		if tag.lower() == 'a':
 			href = [attr[1] for attr in attrs if attr[0] == 'href'][0]
-			if re.match('clavrx_goes13_\d+_\d+_\d+\.kml', href):
+			if re.match('clavrx_goes16_\d+_\d+_\d+\.kml', href):
 				date = self.datetime_from_filename(href)
 				
 				if self.latest == None or date > self.latest:
 					self.latest = date
 
-if __name__ == '__main__':
+def run():
 	HUNDRED_FEET_TO_KM = 0.3048 * 100 * 0.001
 	
 	url_cloudmask_directory = 'http://cimss.ssec.wisc.edu/clavrx/google_earth/goes_east_kml/'
@@ -72,11 +72,11 @@ if __name__ == '__main__':
 	cloudmask_directory_parser.feed(res_cloudmask_directory.text)
 	now = cloudmask_directory_parser.latest
 	
-	url_cloudmask = 'http://cimss.ssec.wisc.edu/clavrx/google_earth/goes_east_kml/clavrx_goes13_%s.kml' % now.strftime('%Y_%j_%H%M')
+	url_cloudmask = 'http://cimss.ssec.wisc.edu/clavrx/google_earth/goes_east_kml/clavrx_goes16_%s.kml' % now.strftime('%Y_%j_%H%M')
 	
 	url_radar = 'http://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.png' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
 	url_radar_wld = 'http://mesonet.agron.iastate.edu/archive/data/%s/GIS/uscomp/n0r_%s.wld' % (now.strftime('%Y/%m/%d'), now.strftime('%Y%m%d%H%M'))
-	url_metar = 'http://aviationweather.ncep.noaa.gov/gis/scripts/MetarJSON.php?date=%s' % now.strftime('%Y%m%d%H%M')
+	url_metar = 'https://www.aviationweather.gov/gis/scripts/MetarJSON.php?date=%s' % now.strftime('%Y%m%d%H%M')
 	
 	res_cloudmask = requests.get(url_cloudmask, stream=True)
 	res_radar = requests.get(url_radar, stream=True)
@@ -128,8 +128,8 @@ if __name__ == '__main__':
 	radar_wld = res_radar_wld.text
 	metar_json = res_metar.json()
 	
-	base_out_dir = sys.argv[1]
-	out_dir = '%s/%d/%d/%d/%d/' % (base_out_dir, now.year, now.month, now.day, now.hour, now.minute)
+	base_out_dir = sys.argv[1] if len(sys.argv) > 1 else 'out/'
+	out_dir = '%s/%d/%d/%d/%d/%d/' % (base_out_dir, now.year, now.month, now.day, now.hour, now.minute)
 	if not os.path.exists(out_dir):
 		os.makedirs(out_dir)
 	
@@ -195,8 +195,8 @@ if __name__ == '__main__':
 					# elev_map.at(P) # although maybe we assume the elev is pretty similar
 					sky_intercept = travel(
 						P * math.pi / 180,
-						math.pi - (pysolar.GetAzimuth(P[1], P[0], now) * math.pi / 180), # pysolar uses latlon; we use lonlat
-						ceil * HUNDRED_FEET_TO_KM / math.tan(pysolar.GetAltitude(P[1], P[0], now) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
+						math.pi - (get_azimuth(P[1], P[0], now) * math.pi / 180), # pysolar uses latlon; we use lonlat
+						ceil * HUNDRED_FEET_TO_KM / math.tan(get_altitude(P[1], P[0], now) * math.pi / 180) / 6370 # TEMP: earth radius will find a better home later
 					)
 					cloudmask_coords = np.divide(sky_intercept * 180 / math.pi - cloudmask_nw, cloudmask_dv).astype(np.uint16)
 					try:
@@ -271,3 +271,6 @@ if __name__ == '__main__':
 		cloudmask_wld_out.write(cloudmask_wld)
 		
 		radar_wld_out.write(radar_wld)
+
+if __name__ == '__main__':
+	run()
